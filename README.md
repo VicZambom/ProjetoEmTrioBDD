@@ -2,6 +2,12 @@
 
 > Projeto acadêmico desenvolvido em trio para a disciplina de Banco de Dados no curso de Análise e Desenvolvimento de Sistemas (ADS) – SENAC.
 
+## 👥 Integrantes do Projeto
+
+- Maíra Lourenço (GitHub: [@MairaLourencoDEV](https://github.com/MairaLourencoDEV)
+- Manoel Olímpio (GitHub: [@Molimpion](https://github.com/Molimpion))
+- Victoria Zambom (GitHub: [@VicZambom](https://github.com/VicZambom))
+
 ## 📚 Descrição
 
 Este projeto tem como objetivo a criação do esquema de um banco de dados relacional utilizando MySQL. A proposta envolve modelar tabelas com chaves primárias, estrangeiras, constraints e relacionamentos coerentes para representar um sistema comercial com funcionalidades de vendas, promoções, produtos e usuários.
