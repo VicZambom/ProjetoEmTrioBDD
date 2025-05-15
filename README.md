@@ -4,7 +4,7 @@
 
 ## 👥 Integrantes do Projeto
 
-- Maíra Lourenço (GitHub: [@MairaLourencoDEV](https://github.com/MairaLourencoDEV)
+- Maíra Lourenço (GitHub: [@MairaLourencoDEV](https://github.com/MairaLourencoDEV))
 - Manoel Olímpio (GitHub: [@Molimpion](https://github.com/Molimpion))
 - Victoria Zambom (GitHub: [@VicZambom](https://github.com/VicZambom))
 
