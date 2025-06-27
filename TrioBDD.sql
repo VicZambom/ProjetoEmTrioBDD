@@ -1,4 +1,8 @@
 
+--------------------------------------------------------------------
+-- PARTE 1 BD-Projeto em Trio
+--------------------------------------------------------------------
+
 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0;
 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0;
 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
@@ -649,3 +653,242 @@ CREATE VIEW vw_estoque_por_categoria AS
     JOIN Estoque e ON p.idProduto = e.idProduto
     GROUP BY cp.Nome_Categoria
     ORDER BY Valor_Total_Estoque DESC;
+
+--------------------------------------------------------------------
+-- PARTE 2 BD-Projeto em Trio
+--------------------------------------------------------------------
+-- -----------------------------------------------------
+-- Procedures
+-- -----------------------------------------------------
+DELIMITER //
+
+CREATE PROCEDURE sp_registrar_venda (
+    IN p_idCliente INT,
+    IN p_idFuncionario INT,
+    IN p_data DATE,
+    IN p_valor DECIMAL(10,2),
+    IN p_obs TEXT
+)
+BEGIN
+    DECLARE novaVendaId INT;
+    INSERT INTO Venda (Data_Venda, Valor_Total, idCliente, idFuncionario, Observacao)
+    VALUES (p_data, p_valor, p_idCliente, p_idFuncionario, p_obs);
+    SET novaVendaId = LAST_INSERT_ID();
+    INSERT INTO Item_Venda (Quantidade, Preco_Unitario, idProduto, idVenda)
+    VALUES (1, 50.00, 1, novaVendaId);
+    UPDATE Produto SET Status = 'Inativo' WHERE idProduto = 1;
+END;//
+
+CREATE PROCEDURE sp_desativar_produto (IN p_idProduto INT)
+BEGIN
+    UPDATE Produto SET Status = 'Inativo' WHERE idProduto = p_idProduto;
+    DELETE FROM Estoque WHERE idProduto = p_idProduto;
+    DELETE FROM Produto_Promocao WHERE idProduto = p_idProduto;
+    INSERT INTO Produto_Promocao (idProduto, idPromocao, idFornecedor)
+    VALUES (p_idProduto, 1, 1);
+END;//
+
+CREATE PROCEDURE sp_clientes_ativos_por_periodo (
+    IN p_data_inicio DATE,
+    IN p_data_fim DATE
+)
+BEGIN
+    SELECT DISTINCT c.Nome_Cliente
+    FROM Cliente c
+    JOIN Venda v ON c.idCliente = v.idCliente
+    WHERE v.Data_Venda BETWEEN p_data_inicio AND p_data_fim;
+    SELECT COUNT(*) FROM Cliente;
+    SELECT MAX(Data_Cadastro) FROM Cliente;
+    SELECT MIN(Data_Cadastro) FROM Cliente;
+END;//
+
+CREATE PROCEDURE sp_promocao_detalhes ()
+BEGIN
+    SELECT p.Nome_Produto, pr.Nome_Promocao, pr.Desconto
+    FROM Produto p
+    JOIN Produto_Promocao pp ON p.idProduto = pp.idProduto
+    JOIN Promocao pr ON pr.idPromocao = pp.idPromocao;
+    SELECT COUNT(*) FROM Promocao;
+    SELECT MAX(Data_Fim) FROM Promocao;
+    SELECT MIN(Data_Inicio) FROM Promocao;
+END;//
+
+CREATE PROCEDURE sp_estoque_critico ()
+BEGIN
+    SELECT * FROM Estoque WHERE Quantidade < 50;
+    SELECT COUNT(*) FROM Estoque WHERE Quantidade < 50;
+    SELECT AVG(Quantidade) FROM Estoque;
+    SELECT MAX(Quantidade) FROM Estoque;
+END;//
+
+CREATE PROCEDURE sp_resumo_funcionario (IN p_idFuncionario INT)
+BEGIN
+    SELECT Nome_Funcionario, Email FROM Funcionario WHERE idFuncionario = p_idFuncionario;
+    SELECT COUNT(*) AS Total_Vendas FROM Venda WHERE idFuncionario = p_idFuncionario;
+    SELECT SUM(Valor_Total) AS Soma_Vendas FROM Venda WHERE idFuncionario = p_idFuncionario;
+    SELECT AVG(Valor_Total) AS Media_Vendas FROM Venda WHERE idFuncionario = p_idFuncionario;
+END;//
+
+DELIMITER ;
+
+-- -----------------------------------------------------
+-- Teste de procedures
+-- -----------------------------------------------------
+CALL sp_registrar_venda(1, 2, '2024-06-01', 100.00, 'Venda de teste');
+CALL sp_desativar_produto(2);
+CALL sp_clientes_ativos_por_periodo('2024-01-01', '2024-06-30');
+CALL sp_promocao_detalhes();
+CALL sp_estoque_critico();
+CALL sp_resumo_funcionario(2);
+
+-- -----------------------------------------------------
+-- Functions
+-- -----------------------------------------------------
+DELIMITER //
+
+CREATE FUNCTION fn_valor_total_cliente(p_idCliente INT)
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+    DECLARE total DECIMAL(10,2);
+    SELECT SUM(Valor_Total) INTO total FROM Venda WHERE idCliente = p_idCliente;
+    RETURN total;
+END;//
+
+CREATE FUNCTION fn_quantidade_vendas_funcionario(p_idFuncionario INT)
+RETURNS INT
+DETERMINISTIC
+BEGIN
+    DECLARE total INT;
+    SELECT COUNT(*) INTO total FROM Venda WHERE idFuncionario = p_idFuncionario;
+    RETURN total;
+END;//
+
+CREATE FUNCTION fn_estoque_total()
+RETURNS INT
+DETERMINISTIC
+BEGIN
+    DECLARE total INT;
+    SELECT SUM(Quantidade) INTO total FROM Estoque;
+    RETURN total;
+END;//
+
+CREATE FUNCTION fn_cliente_mais_gastou()
+RETURNS VARCHAR(150)
+DETERMINISTIC
+BEGIN
+    DECLARE nome VARCHAR(150);
+    SELECT Nome_Cliente INTO nome
+    FROM Cliente c
+    JOIN Venda v ON c.idCliente = v.idCliente
+    GROUP BY c.idCliente
+    ORDER BY SUM(v.Valor_Total) DESC
+    LIMIT 1;
+    RETURN nome;
+END;//
+
+CREATE FUNCTION fn_preco_medio_produtos()
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+    DECLARE media DECIMAL(10,2);
+    SELECT AVG(Preco) INTO media FROM Produto;
+    RETURN media;
+END;//
+
+CREATE FUNCTION fn_promocoes_ativas()
+RETURNS INT
+DETERMINISTIC
+BEGIN
+    DECLARE total INT;
+    SELECT COUNT(*) INTO total FROM Promocao WHERE Ativo = TRUE;
+    RETURN total;
+END;//
+
+DELIMITER ;
+
+-- -----------------------------------------------------
+-- Teste de functions
+-- -----------------------------------------------------
+SELECT fn_valor_total_cliente(1);
+SELECT fn_quantidade_vendas_funcionario(2);
+SELECT fn_estoque_total();
+SELECT fn_cliente_mais_gastou();
+SELECT fn_preco_medio_produtos();
+SELECT fn_promocoes_ativas();
+
+-- -----------------------------------------------------
+-- Triggers
+-- -----------------------------------------------------
+DELIMITER //
+
+CREATE TRIGGER trg_before_insert_cliente
+BEFORE INSERT ON Cliente
+FOR EACH ROW
+BEGIN
+    IF NEW.Email NOT LIKE '%@%' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Email inválido';
+    END IF;
+END;//
+
+CREATE TRIGGER trg_after_insert_venda
+AFTER INSERT ON Venda
+FOR EACH ROW
+BEGIN
+    INSERT INTO Log_Vendas (idVenda, Data_Log)
+    VALUES (NEW.idVenda, NOW());
+END;//
+
+CREATE TRIGGER trg_before_update_estoque
+BEFORE UPDATE ON Estoque
+FOR EACH ROW
+BEGIN
+    IF NEW.Quantidade < 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Quantidade não pode ser negativa';
+    END IF;
+END;//
+
+CREATE TRIGGER trg_after_delete_produto
+AFTER DELETE ON Produto
+FOR EACH ROW
+BEGIN
+    INSERT INTO Log_Produtos (Nome_Produto, Data_Remocao)
+    VALUES (OLD.Nome_Produto, NOW());
+END;//
+
+CREATE TRIGGER trg_before_insert_funcionario
+BEFORE INSERT ON Funcionario
+FOR EACH ROW
+BEGIN
+    IF NEW.CPF IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CPF obrigatório';
+    END IF;
+END;//
+
+CREATE TRIGGER trg_after_update_promocao
+AFTER UPDATE ON Promocao
+FOR EACH ROW
+BEGIN
+    INSERT INTO Log_Promocoes (idPromocao, Data_Atualizacao)
+    VALUES (NEW.idPromocao, NOW());
+END;//
+
+DELIMITER ;
+
+-- -----------------------------------------------------
+-- Teste de triggers
+-- -----------------------------------------------------
+INSERT INTO Cliente (Nome_Cliente, CPF, Email, Telefone, Endereco_Completo, Sexo, Data_Nascimento)
+VALUES ('Teste Trigger', '999.999.999-99', 'emailinvalido', '(00) 00000-0000', 'Rua Teste, 123', 'Feminino', '2000-01-01');
+
+INSERT INTO Venda (Data_Venda, Valor_Total, idCliente, idFuncionario)
+VALUES (NOW(), 200.00, 1, 2);
+
+UPDATE Estoque SET Quantidade = -10 WHERE idEstoque = 1;
+
+DELETE FROM Produto WHERE idProduto = 1;
+
+INSERT INTO Funcionario (Nome_Funcionario, CPF, Email)
+VALUES ('Novo Funcionario', NULL, 'email@teste.com');
+
+UPDATE Promocao SET Desconto = 0.30 WHERE idPromocao = 1;
