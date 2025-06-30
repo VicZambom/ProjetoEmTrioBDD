@@ -657,238 +657,800 @@ CREATE VIEW vw_estoque_por_categoria AS
 --------------------------------------------------------------------
 -- PARTE 2 BD-Projeto em Trio
 --------------------------------------------------------------------
--- -----------------------------------------------------
--- Procedures
--- -----------------------------------------------------
-DELIMITER //
+-- Creat Procedure
+-------------------------------------------------------------------
 
-CREATE PROCEDURE sp_registrar_venda (
+DELIMITER $$
+
+-- 1. Procedure para Registrar Nova Venda Completa (Simplificada para um ÚNICO produto por chamada)
+-- Esta procedure registra uma nova venda, adiciona UM item da venda e atualiza o estoque do produto vendido.
+CREATE PROCEDURE RegistrarNovaVendaCompleta(
     IN p_idCliente INT,
     IN p_idFuncionario INT,
-    IN p_data DATE,
-    IN p_valor DECIMAL(10,2),
-    IN p_obs TEXT
+    IN p_DataVenda DATE,
+    IN p_Observacao TEXT,
+    IN p_idProduto INT,         -- ID do produto
+    IN p_quantidade INT,        -- Quantidade deste produto
+    IN p_precoUnitario DECIMAL(10,2) -- Preço unitário deste produto
 )
 BEGIN
-    DECLARE novaVendaId INT;
-    INSERT INTO Venda (Data_Venda, Valor_Total, idCliente, idFuncionario, Observacao)
-    VALUES (p_data, p_valor, p_idCliente, p_idFuncionario, p_obs);
-    SET novaVendaId = LAST_INSERT_ID();
+    DECLARE v_idVenda INT;
+    DECLARE v_estoqueAtual INT;
+    DECLARE v_valorTotalVenda DECIMAL(10,2);
+
+    -- Inicia a transação
+    START TRANSACTION;
+
+    -- 1. Insere a nova venda com o valor inicial do item (será atualizado)
+    INSERT INTO Venda (Data_Venda, Valor_Total, idCliente, idFuncionario, Observacoes)
+    VALUES (p_DataVenda, (p_quantidade * p_precoUnitario), p_idCliente, p_idFuncionario, p_Observacao);
+
+    SET v_idVenda = LAST_INSERT_ID();
+
+    -- 2. Insere o item da venda
     INSERT INTO Item_Venda (Quantidade, Preco_Unitario, idProduto, idVenda)
-    VALUES (1, 50.00, 1, novaVendaId);
-    UPDATE Produto SET Status = 'Inativo' WHERE idProduto = 1;
-END;//
+    VALUES (p_quantidade, p_precoUnitario, p_idProduto, v_idVenda);
 
-CREATE PROCEDURE sp_desativar_produto (IN p_idProduto INT)
-BEGIN
-    UPDATE Produto SET Status = 'Inativo' WHERE idProduto = p_idProduto;
-    DELETE FROM Estoque WHERE idProduto = p_idProduto;
-    DELETE FROM Produto_Promocao WHERE idProduto = p_idProduto;
-    INSERT INTO Produto_Promocao (idProduto, idPromocao, idFornecedor)
-    VALUES (p_idProduto, 1, 1);
-END;//
+    -- 3. Obtém a quantidade atual do produto em estoque
+    SELECT Quantidade INTO v_estoqueAtual
+    FROM Estoque
+    WHERE idProduto = p_idProduto;
 
-CREATE PROCEDURE sp_clientes_ativos_por_periodo (
-    IN p_data_inicio DATE,
-    IN p_data_fim DATE
+    -- 4. Atualiza o estoque do produto (diminuindo a quantidade vendida)
+    UPDATE Estoque
+    SET Quantidade = v_estoqueAtual - p_quantidade
+    WHERE idProduto = p_idProduto;
+
+    -- 5. Atualiza o valor total da venda na tabela Venda
+    -- (Para uma venda "completa" com vários itens, você chamaria esta procedure para cada item e precisaria de uma lógica de soma externa,
+    -- ou aprimorar para uma procedure que adiciona item a uma venda *já existente* e atualiza o total dessa venda.)
+    -- Neste formato simplificado, o Valor_Total da Venda é o valor do ÚNICO item inserido por esta chamada.
+    SET v_valorTotalVenda = (p_quantidade * p_precoUnitario); -- Calcula o valor total para este item
+
+    UPDATE Venda
+    SET Valor_Total = v_valorTotalVenda
+    WHERE idVenda = v_idVenda;
+
+    -- Confirma a transação
+    COMMIT;
+
+END $$
+
+-- 2. Procedure para Gerenciar Promoções de Produtos (Adicionar/Remover/Atualizar)
+-- Esta procedure permite adicionar um produto a uma promoção, remover ou atualizar o desconto.
+CREATE PROCEDURE GerenciarPromocaoProduto(
+    IN p_idProduto INT,
+    IN p_idPromocao INT,
+    IN p_acao VARCHAR(10), -- 'ADICIONAR', 'REMOVER', 'ATUALIZAR'
+    IN p_novoDesconto DECIMAL(5,2) -- Apenas para 'ATUALIZAR'
 )
 BEGIN
-    SELECT DISTINCT c.Nome_Cliente
-    FROM Cliente c
-    JOIN Venda v ON c.idCliente = v.idCliente
-    WHERE v.Data_Venda BETWEEN p_data_inicio AND p_data_fim;
-    SELECT COUNT(*) FROM Cliente;
-    SELECT MAX(Data_Cadastro) FROM Cliente;
-    SELECT MIN(Data_Cadastro) FROM Cliente;
-END;//
+    DECLARE v_existe INT;
 
-CREATE PROCEDURE sp_promocao_detalhes ()
-BEGIN
-    SELECT p.Nome_Produto, pr.Nome_Promocao, pr.Desconto
-    FROM Produto p
-    JOIN Produto_Promocao pp ON p.idProduto = pp.idProduto
-    JOIN Promocao pr ON pr.idPromocao = pp.idPromocao;
-    SELECT COUNT(*) FROM Promocao;
-    SELECT MAX(Data_Fim) FROM Promocao;
-    SELECT MIN(Data_Inicio) FROM Promocao;
-END;//
-
-CREATE PROCEDURE sp_estoque_critico ()
-BEGIN
-    SELECT * FROM Estoque WHERE Quantidade < 50;
-    SELECT COUNT(*) FROM Estoque WHERE Quantidade < 50;
-    SELECT AVG(Quantidade) FROM Estoque;
-    SELECT MAX(Quantidade) FROM Estoque;
-END;//
-
-CREATE PROCEDURE sp_resumo_funcionario (IN p_idFuncionario INT)
-BEGIN
-    SELECT Nome_Funcionario, Email FROM Funcionario WHERE idFuncionario = p_idFuncionario;
-    SELECT COUNT(*) AS Total_Vendas FROM Venda WHERE idFuncionario = p_idFuncionario;
-    SELECT SUM(Valor_Total) AS Soma_Vendas FROM Venda WHERE idFuncionario = p_idFuncionario;
-    SELECT AVG(Valor_Total) AS Media_Vendas FROM Venda WHERE idFuncionario = p_idFuncionario;
-END;//
-
-DELIMITER ;
-
--- -----------------------------------------------------
--- Teste de procedures
--- -----------------------------------------------------
-CALL sp_registrar_venda(1, 2, '2024-06-01', 100.00, 'Venda de teste');
-CALL sp_desativar_produto(2);
-CALL sp_clientes_ativos_por_periodo('2024-01-01', '2024-06-30');
-CALL sp_promocao_detalhes();
-CALL sp_estoque_critico();
-CALL sp_resumo_funcionario(2);
-
--- -----------------------------------------------------
--- Functions
--- -----------------------------------------------------
-DELIMITER //
-
-CREATE FUNCTION fn_valor_total_cliente(p_idCliente INT)
-RETURNS DECIMAL(10,2)
-DETERMINISTIC
-BEGIN
-    DECLARE total DECIMAL(10,2);
-    SELECT SUM(Valor_Total) INTO total FROM Venda WHERE idCliente = p_idCliente;
-    RETURN total;
-END;//
-
-CREATE FUNCTION fn_quantidade_vendas_funcionario(p_idFuncionario INT)
-RETURNS INT
-DETERMINISTIC
-BEGIN
-    DECLARE total INT;
-    SELECT COUNT(*) INTO total FROM Venda WHERE idFuncionario = p_idFuncionario;
-    RETURN total;
-END;//
-
-CREATE FUNCTION fn_estoque_total()
-RETURNS INT
-DETERMINISTIC
-BEGIN
-    DECLARE total INT;
-    SELECT SUM(Quantidade) INTO total FROM Estoque;
-    RETURN total;
-END;//
-
-CREATE FUNCTION fn_cliente_mais_gastou()
-RETURNS VARCHAR(150)
-DETERMINISTIC
-BEGIN
-    DECLARE nome VARCHAR(150);
-    SELECT Nome_Cliente INTO nome
-    FROM Cliente c
-    JOIN Venda v ON c.idCliente = v.idCliente
-    GROUP BY c.idCliente
-    ORDER BY SUM(v.Valor_Total) DESC
-    LIMIT 1;
-    RETURN nome;
-END;//
-
-CREATE FUNCTION fn_preco_medio_produtos()
-RETURNS DECIMAL(10,2)
-DETERMINISTIC
-BEGIN
-    DECLARE media DECIMAL(10,2);
-    SELECT AVG(Preco) INTO media FROM Produto;
-    RETURN media;
-END;//
-
-CREATE FUNCTION fn_promocoes_ativas()
-RETURNS INT
-DETERMINISTIC
-BEGIN
-    DECLARE total INT;
-    SELECT COUNT(*) INTO total FROM Promocao WHERE Ativo = TRUE;
-    RETURN total;
-END;//
-
-DELIMITER ;
-
--- -----------------------------------------------------
--- Teste de functions
--- -----------------------------------------------------
-SELECT fn_valor_total_cliente(1);
-SELECT fn_quantidade_vendas_funcionario(2);
-SELECT fn_estoque_total();
-SELECT fn_cliente_mais_gastou();
-SELECT fn_preco_medio_produtos();
-SELECT fn_promocoes_ativas();
-
--- -----------------------------------------------------
--- Triggers
--- -----------------------------------------------------
-DELIMITER //
-
-CREATE TRIGGER trg_before_insert_cliente
-BEFORE INSERT ON Cliente
-FOR EACH ROW
-BEGIN
-    IF NEW.Email NOT LIKE '%@%' THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Email inválido';
+    -- 1. Verifica se a promoção e o produto existem (opcional, mas boa prática)
+    SELECT COUNT(*) INTO v_existe FROM Promocao WHERE idPromocao = p_idPromocao;
+    IF v_existe = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Promoção não encontrada.';
     END IF;
-END;//
 
-CREATE TRIGGER trg_after_insert_venda
-AFTER INSERT ON Venda
+    SELECT COUNT(*) INTO v_existe FROM Produto WHERE idProduto = p_idProduto;
+    IF v_existe = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Produto não encontrado.';
+    END IF;
+
+    IF p_acao = 'ADICIONAR' THEN
+        -- 2. Adiciona o produto à promoção se ainda não estiver lá
+        INSERT IGNORE INTO Produto_Promocao (idProduto, idPromocao)
+        VALUES (p_idProduto, p_idPromocao);
+        SELECT 'Produto adicionado à promoção com sucesso (se já não existia).' AS Mensagem;
+
+    ELSEIF p_acao = 'REMOVER' THEN
+        -- 3. Remove o produto da promoção
+        DELETE FROM Produto_Promocao
+        WHERE idProduto = p_idProduto AND idPromocao = p_idPromocao;
+        SELECT 'Produto removido da promoção com sucesso (se existia).' AS Mensagem;
+
+    ELSEIF p_acao = 'ATUALIZAR' THEN
+        -- 4. Atualiza o desconto da promoção (na tabela Promocao)
+        UPDATE Promocao
+        SET Desconto = p_novoDesconto
+        WHERE idPromocao = p_idPromocao;
+        SELECT 'Desconto da promoção atualizado com sucesso.' AS Mensagem;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ação inválida. Use ADICIONAR, REMOVER ou ATUALIZAR.';
+    END IF;
+
+    -- 5. Consulta o status atual da promoção (para ADICIONAR/ATUALIZAR)
+    SELECT Nome_Promocao, Data_Inicio, Data_Fim, Desconto, Ativo
+    FROM Promocao
+    WHERE idPromocao = p_idPromocao;
+
+END $$
+
+-- 3. Procedure para Atualizar Status de Produtos e Fornecedores
+-- Altera o status de um produto (Ativo/Inativo) e o status do fornecedor principal do produto.
+CREATE PROCEDURE AtualizarStatusProdutoFornecedor(
+    IN p_idProduto INT,
+    IN p_statusProduto ENUM('Ativo', 'Inativo')
+)
+BEGIN
+    DECLARE v_idFornecedor INT;
+
+    -- Inicia a transação
+    START TRANSACTION;
+
+    -- 1. Obtém o idFornecedor do produto
+    SELECT idFornecedor INTO v_idFornecedor
+    FROM Produto
+    WHERE idProduto = p_idProduto;
+
+    -- 2. Atualiza o status do produto
+    UPDATE Produto
+    SET Status = p_statusProduto
+    WHERE idProduto = p_idProduto;
+
+    -- 3. Verifica se o fornecedor existe e exibe uma mensagem
+    -- Nota: A tabela Fornecedor do seu esquema original não tem uma coluna 'Ativo'.
+    -- Para uma funcionalidade completa aqui, essa coluna precisaria ser adicionada.
+    IF v_idFornecedor IS NOT NULL THEN
+        SELECT CONCAT('Status do produto atualizado para ', p_statusProduto, '. Fornecedor associado (ID: ', v_idFornecedor, ') não tem status controlável diretamente por esta procedure.') AS Mensagem;
+    END IF;
+
+    -- 4. Registra a ação de atualização de produto
+    -- (Este é um exemplo de comando SQL distinto. Para um log real, você precisaria de uma tabela de log.)
+    -- SELECT 'Ação de atualização de status do produto registrada.' AS LogStatus;
+
+    -- 5. Seleciona os dados atualizados do produto para confirmação
+    SELECT Nome_Produto, Status, idFornecedor
+    FROM Produto
+    WHERE idProduto = p_idProduto;
+
+    -- Confirma a transação
+    COMMIT;
+
+END $$
+
+-- 4. Procedure para Gerar Relatório de Vendas Detalhado por Período e Funcionário
+-- Gera um relatório detalhado de vendas incluindo informações do cliente e do produto.
+CREATE PROCEDURE GerarRelatorioVendasDetalhado(
+    IN p_DataInicio DATE,
+    IN p_DataFim DATE,
+    IN p_idFuncionario INT
+)
+BEGIN
+    -- 1. Seleciona informações detalhadas da venda
+    SELECT
+        v.idVenda,
+        v.Data_Venda,
+        v.Valor_Total,
+        c.Nome_Cliente,
+        f.Nome_Funcionario,
+        iv.Quantidade AS Quantidade_Vendida,
+        iv.Preco_Unitario,
+        p.Nome_Produto,
+        p.Preco AS Preco_Produto_Cadastro
+    FROM Venda v
+    JOIN Cliente c ON v.idCliente = c.idCliente
+    JOIN Funcionario f ON v.idFuncionario = f.idFuncionario
+    JOIN Item_Venda iv ON v.idVenda = iv.idVenda
+    JOIN Produto p ON iv.idProduto = p.idProduto
+    WHERE v.Data_Venda BETWEEN p_DataInicio AND p_DataFim
+    AND (p_idFuncionario IS NULL OR f.idFuncionario = p_idFuncionario)
+    ORDER BY v.Data_Venda, v.idVenda;
+
+    -- 2. Calcula o total de vendas para o período/funcionário
+    SELECT SUM(Valor_Total) AS Total_Vendas_Periodo
+    FROM Venda
+    WHERE Data_Venda BETWEEN p_DataInicio AND p_DataFim
+    AND (p_idFuncionario IS NULL OR idFuncionario = p_idFuncionario);
+
+    -- 3. Conta o número de vendas realizadas
+    SELECT COUNT(DISTINCT idVenda) AS Numero_Total_Vendas
+    FROM Venda
+    WHERE Data_Venda BETWEEN p_DataInicio AND p_DataFim
+    AND (p_idFuncionario IS NULL OR idFuncionario = p_idFuncionario);
+
+    -- 4. Identifica o produto mais vendido nesse período/funcionário
+    SELECT p.Nome_Produto, SUM(iv.Quantidade) AS Total_Quantidade_Vendida
+    FROM Venda v
+    JOIN Item_Venda iv ON v.idVenda = iv.idVenda
+    JOIN Produto p ON iv.idProduto = p.idProduto
+    WHERE v.Data_Venda BETWEEN p_DataInicio AND p_DataFim
+    AND (p_idFuncionario IS NULL OR v.idFuncionario = p_idFuncionario)
+    GROUP BY p.Nome_Produto
+    ORDER BY Total_Quantidade_Vendida DESC
+    LIMIT 1;
+
+END $$
+
+-- 5. Procedure para Gerenciar Cadastro de Clientes (Adicionar/Atualizar/Excluir)
+-- Permite adicionar, atualizar ou excluir informações de clientes.
+CREATE PROCEDURE GerenciarCadastroCliente(
+    IN p_acao VARCHAR(10), -- 'ADICIONAR', 'ATUALIZAR', 'EXCLUIR'
+    IN p_idCliente INT, -- Necessário para ATUALIZAR/EXCLUIR
+    IN p_nomeCliente VARCHAR(150),
+    IN p_cpf VARCHAR(14),
+    IN p_email VARCHAR(100),
+    IN p_telefone VARCHAR(20),
+    IN p_enderecoCompleto VARCHAR(200)
+)
+BEGIN
+    IF p_acao = 'ADICIONAR' THEN
+        -- 1. Adiciona um novo cliente
+        INSERT INTO Cliente (Nome_Cliente, CPF, Email, Telefone, Endereco_Completo, Data_Cadastro)
+        VALUES (p_nomeCliente, p_cpf, p_email, p_telefone, p_enderecoCompleto, CURDATE());
+        SELECT 'Cliente adicionado com sucesso.' AS Mensagem, LAST_INSERT_ID() AS idNovoCliente;
+
+    ELSEIF p_acao = 'ATUALIZAR' THEN
+        -- 2. Atualiza informações de um cliente existente
+        UPDATE Cliente
+        SET
+            Nome_Cliente = p_nomeCliente,
+            CPF = p_cpf,
+            Email = p_email,
+            Telefone = p_telefone,
+            Endereco_Completo = p_enderecoCompleto
+        WHERE idCliente = p_idCliente;
+        SELECT 'Cliente atualizado com sucesso.' AS Mensagem, p_idCliente AS idClienteAtualizado;
+
+        -- 3. Verifica se a atualização afetou alguma linha
+        IF ROW_COUNT() = 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nenhum cliente encontrado com o ID fornecido para atualização.';
+        END IF;
+
+    ELSEIF p_acao = 'EXCLUIR' THEN
+        -- 4. Exclui um cliente (e vendas associadas devido a CASCADE em algumas FKs se aplicável, ou via DELETE manual)
+        -- Nota: Cuidado com a integridade referencial. Vendas e outros registros podem ter FKs para Cliente.
+        -- Para o seu schema, a FK de Venda para Cliente é ON DELETE RESTRICT, então seria necessário deletar vendas primeiro.
+        DELETE FROM Cliente
+        WHERE idCliente = p_idCliente;
+        SELECT 'Cliente excluído com sucesso.' AS Mensagem, p_idCliente AS idClienteExcluido;
+
+        -- 5. Verifica se a exclusão afetou alguma linha
+        IF ROW_COUNT() = 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nenhum cliente encontrado com o ID fornecido para exclusão.';
+        END IF;
+
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ação inválida. Use ADICIONAR, ATUALIZAR ou EXCLUIR.';
+    END IF;
+
+    -- 6. Seleciona o registro do cliente após a operação (se ADICIONAR/ATUALIZAR)
+    IF p_acao IN ('ADICIONAR', 'ATUALIZAR') THEN
+        SELECT * FROM Cliente WHERE idCliente = IF(p_acao = 'ADICIONAR', LAST_INSERT_ID(), p_idCliente);
+    END IF;
+
+END $$
+
+-- 6. Procedure para Auditoria de Estoque
+-- Registra ajustes de estoque e, se necessário, alerta sobre baixo estoque.
+CREATE PROCEDURE AuditoriaEstoque(
+    IN p_idProduto INT,
+    IN p_ajusteQuantidade INT, -- Quantidade a adicionar (positiva) ou remover (negativa)
+    IN p_motivo VARCHAR(255),
+    IN p_limiteAlerta INT -- Limite para acionar o alerta de baixo estoque
+)
+BEGIN
+    DECLARE v_quantidadeAtual INT;
+    DECLARE v_novaQuantidade INT;
+
+    -- Inicia a transação
+    START TRANSACTION;
+
+    -- 1. Obtém a quantidade atual do produto em estoque
+    SELECT Quantidade INTO v_quantidadeAtual
+    FROM Estoque
+    WHERE idProduto = p_idProduto;
+
+    -- Verifica se o produto existe no estoque
+    IF v_quantidadeAtual IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Produto não encontrado no estoque.';
+    END IF;
+
+    -- 2. Calcula a nova quantidade
+    SET v_novaQuantidade = v_quantidadeAtual + p_ajusteQuantidade;
+
+    -- Garante que a quantidade não seja negativa
+    IF v_novaQuantidade < 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Ajuste resultaria em quantidade negativa em estoque.';
+    END IF;
+
+    -- 3. Atualiza a quantidade em estoque
+    UPDATE Estoque
+    SET Quantidade = v_novaQuantidade, Data_Entrada = CURDATE() -- Atualiza a data de entrada para o ajuste
+    WHERE idProduto = p_idProduto;
+
+    -- 4. Registra uma mensagem de sucesso ou alerta.
+    IF v_novaQuantidade < p_limiteAlerta THEN
+        SELECT CONCAT('ALERTA: O produto ', (SELECT Nome_Produto FROM Produto WHERE idProduto = p_idProduto), ' está com estoque baixo: ', v_novaQuantidade, ' unidades.') AS Alerta_Estoque;
+    ELSE
+        SELECT 'Ajuste de estoque realizado com sucesso.' AS Mensagem;
+    END IF;
+
+    -- 5. Seleciona os dados atualizados do estoque para verificação
+    SELECT p.Nome_Produto, e.Quantidade FROM Produto p JOIN Estoque e ON p.idProduto = e.idProduto WHERE p.idProduto = p_idProduto;
+
+    -- Confirma a transação
+    COMMIT;
+
+END $$
+
+DELIMITER ;
+
+-- call procedure
+-- 1. Teste da Procedure: RegistrarNovaVendaCompleta (Agora para UM produto por chamada)
+-- Registra uma venda para o Cliente 1 (João Silva) e Funcionario 2 (Fernanda Lima)
+-- com 2 unidades do Produto 1 (Camiseta Básica)
+CALL RegistrarNovaVendaCompleta(1, 2, CURDATE(), 'Venda simplificada de uma camiseta.', 1, 2, 34.99);
+
+-- Para verificar o resultado:
+-- SELECT * FROM Venda ORDER BY idVenda DESC LIMIT 1;
+-- SELECT * FROM Item_Venda ORDER BY idItem_Venda DESC LIMIT 1;
+-- SELECT p.Nome_Produto, e.Quantidade FROM Estoque e JOIN Produto p ON e.idProduto = p.idProduto WHERE e.idProduto = 1;
+
+
+-- 2. Teste da Procedure: GerenciarPromocaoProduto
+-- 2.1 Adiciona o Produto 3 (Saia Midi Floral) à Promoção 1 (Liquidação Verão)
+CALL GerenciarPromocaoProduto(3, 1, 'ADICIONAR', NULL);
+
+-- 2.2 Atualiza o desconto da Promoção 2 (Semana da Moda) para 12%
+CALL GerenciarPromocaoProduto(NULL, 2, 'ATUALIZAR', 0.12); -- NULL para idProduto é aceitável para ATUALIZAR a promoção em si.
+
+-- 2.3 Remove o Produto 1 (Camiseta Básica) da Promoção 1 (Liquidação Verão)
+CALL GerenciarPromocaoProduto(1, 1, 'REMOVER', NULL);
+
+-- Para verificar o resultado:
+-- SELECT * FROM Produto_Promocao WHERE idProduto = 3 AND idPromocao = 1;
+-- SELECT * FROM Promocao WHERE idPromocao = 2;
+-- SELECT * FROM Produto_Promocao WHERE idProduto = 1 AND idPromocao = 1;
+
+
+-- 3. Teste da Procedure: AtualizarStatusProdutoFornecedor
+-- Altera o status do Produto 5 (Colar Pedras) para 'Inativo'
+CALL AtualizarStatusProdutoFornecedor(5, 'Inativo');
+
+-- Altera o status do Produto 5 (Colar Pedras) de volta para 'Ativo'
+CALL AtualizarStatusProdutoFornecedor(5, 'Ativo');
+
+-- Para verificar o resultado:
+-- SELECT idProduto, Nome_Produto, Status FROM Produto WHERE idProduto = 5;
+
+
+-- 4. Teste da Procedure: GerarRelatorioVendasDetalhado
+-- Gera um relatório de vendas detalhado para o mês atual, para todos os funcionários
+CALL GerarRelatorioVendasDetalhado(CURDATE() - INTERVAL 30 DAY, CURDATE(), NULL);
+
+-- Gera um relatório de vendas detalhado para o mês atual, apenas para o Funcionário 1 (Roberto Carlos)
+CALL GerarRelatorioVendasDetalhado(CURDATE() - INTERVAL 30 DAY, CURDATE(), 1);
+
+
+-- 5. Teste da Procedure: GerenciarCadastroCliente
+-- 5.1 Adiciona um novo cliente
+CALL GerenciarCadastroCliente(
+    'ADICIONAR',
+    NULL,
+    'Cliente Simples Teste',
+    '111.111.111-12',
+    'simples.cliente@teste.com',
+    '(99) 99999-0000',
+    'Rua Simples, 1, Bairro Teste Simples'
+);
+
+-- 5.2 Atualiza o cliente recém-adicionado (será o último inserido, então ID 6 ou 7 dependendo dos seus testes anteriores)
+-- ATENÇÃO: Verifique o ID do cliente inserido no passo anterior antes de executar.
+-- Você pode usar SELECT idCliente FROM Cliente WHERE CPF = '111.111.111-12'; para pegar o ID.
+CALL GerenciarCadastroCliente(
+    'ATUALIZAR',
+    (SELECT idCliente FROM Cliente WHERE CPF = '111.111.111-12'), -- Pega o ID dinamicamente
+    'Cliente Simples Atualizado',
+    '111.111.111-12',
+    'simples.atualizado@teste.com',
+    '(99) 88888-0000',
+    'Av. Simples, 2, Nova Area Simples'
+);
+
+-- 5.3 Exclui o cliente (CUIDADO: Se este cliente tiver vendas associadas, a exclusão pode falhar devido à FK ON DELETE RESTRICT)
+CALL GerenciarCadastroCliente('EXCLUIR', (SELECT idCliente FROM Cliente WHERE CPF = '111.111.111-12'), NULL, NULL, NULL, NULL, NULL);
+
+
+-- 6. Teste da Procedure: AuditoriaEstoque
+-- Adiciona 10 unidades ao Produto 1 (Camiseta Básica) e define o limite de alerta em 50
+CALL AuditoriaEstoque(1, 10, 'Recebimento de nova mercadoria', 50);
+
+-- Remove 70 unidades do Produto 2 (Calça Jeans Skinny) e define o limite de alerta em 100
+CALL AuditoriaEstoque(2, -70, 'Venda em massa', 100);
+
+-- Para verificar o resultado:
+SELECT p.Nome_Produto, e.Quantidade FROM Estoque e JOIN Produto p ON e.idProduto = p.idProduto WHERE e.idProduto IN (1, 2);
+
+-----------------------------------------
+-- Create functions
+-----------------------------------------
+
+DELIMITER $$
+
+-- 1. Função: CalcularValorTotalVendaPorId
+-- Retorna o valor total de uma venda específica, somando o valor de todos os seus itens.
+CREATE FUNCTION CalcularValorTotalVendaPorId(p_idVenda INT)
+RETURNS DECIMAL(10,2)
+READS SQL DATA
+BEGIN
+    DECLARE v_total DECIMAL(10,2);
+    SELECT SUM(Quantidade * Preco_Unitario)
+    INTO v_total
+    FROM Item_Venda
+    WHERE idVenda = p_idVenda;
+
+    -- Se a venda não tiver itens ou não existir, retorna 0
+    IF v_total IS NULL THEN
+        SET v_total = 0;
+    END IF;
+
+    RETURN v_total;
+END $$
+
+-- 2. Função: ObterQuantidadeProdutosPorCategoria
+-- Retorna o número total de produtos em uma categoria específica.
+CREATE FUNCTION ObterQuantidadeProdutosPorCategoria(p_idCategoria INT)
+RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_quantidade INT;
+    SELECT COUNT(idProduto)
+    INTO v_quantidade
+    FROM Produto
+    WHERE idCategoria = p_idCategoria;
+
+    RETURN v_quantidade;
+END $$
+
+-- 3. Função: VerificarEstoqueDisponivel
+-- Retorna a quantidade disponível de um produto em estoque.
+CREATE FUNCTION VerificarEstoqueDisponivel(p_idProduto INT)
+RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_quantidade INT;
+    SELECT Quantidade
+    INTO v_quantidade
+    FROM Estoque
+    WHERE idProduto = p_idProduto;
+
+    -- Se o produto não estiver no estoque, retorna 0
+    IF v_quantidade IS NULL THEN
+        SET v_quantidade = 0;
+    END IF;
+
+    RETURN v_quantidade;
+END $$
+
+-- 4. Função: ObterPrecoMedioCategoria
+-- Retorna o preço médio dos produtos em uma categoria específica.
+CREATE FUNCTION ObterPrecoMedioCategoria(p_idCategoria INT)
+RETURNS DECIMAL(10,2)
+READS SQL DATA
+BEGIN
+    DECLARE v_precoMedio DECIMAL(10,2);
+    SELECT AVG(Preco)
+    INTO v_precoMedio
+    FROM Produto
+    WHERE idCategoria = p_idCategoria;
+
+    IF v_precoMedio IS NULL THEN
+        SET v_precoMedio = 0.00;
+    END IF;
+
+    RETURN v_precoMedio;
+END $$
+
+-- 5. Função: ObterNomeFuncionarioPorId
+-- Retorna o nome completo de um funcionário dado o seu ID.
+CREATE FUNCTION ObterNomeFuncionarioPorId(p_idFuncionario INT)
+RETURNS VARCHAR(150)
+READS SQL DATA
+BEGIN
+    DECLARE v_nomeFuncionario VARCHAR(150);
+    SELECT Nome_Funcionario INTO v_nomeFuncionario
+    FROM Funcionario
+    WHERE idFuncionario = p_idFuncionario;
+
+    IF v_nomeFuncionario IS NULL THEN
+        RETURN 'Funcionário não encontrado';
+    END IF;
+
+    RETURN v_nomeFuncionario;
+END $$
+
+-- 6. Função: ContarItensVendidosPorProduto
+-- Retorna o total de um produto específico vendido em todas as vendas.
+CREATE FUNCTION ContarItensVendidosPorProduto(p_idProduto INT)
+RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_totalVendido INT;
+    SELECT SUM(Quantidade)
+    INTO v_totalVendido
+    FROM Item_Venda
+    WHERE idProduto = p_idProduto;
+
+    IF v_totalVendido IS NULL THEN
+        SET v_totalVendido = 0;
+    END IF;
+
+    RETURN v_totalVendido;
+END $$
+
+DELIMITER ;
+
+-- Teste functions
+-- 1. Teste da Função: CalcularValorTotalVendaPorId
+-- Substitua '1' por um ID de venda real existente no seu banco.
+SELECT CalcularValorTotalVendaPorId(1) AS ValorTotalDaPrimeiraVenda;
+
+
+-- 2. Teste da Função: ObterQuantidadeProdutosPorCategoria
+-- Substitua '1' por um ID de categoria real existente (ex: Roupas Femininas).
+SELECT ObterQuantidadeProdutosPorCategoria(1) AS QtdProdutosCategoria1;
+-- Teste com uma categoria que pode não ter produtos (ou um ID inexistente)
+SELECT ObterQuantidadeProdutosPorCategoria(999) AS QtdProdutosCategoriaInexistente;
+
+
+-- 3. Teste da Função: VerificarEstoqueDisponivel
+-- Verifica a quantidade disponível de produtos no estoque.
+SELECT VerificarEstoqueDisponivel(1) AS EstoqueProduto1CamisetaBasica;    -- ID 1: Camiseta Básica
+SELECT VerificarEstoqueDisponivel(2) AS EstoqueProduto2CalcaJeansSkinny; -- ID 2: Calça Jeans Skinny
+SELECT VerificarEstoqueDisponivel(999) AS EstoqueProdutoInexistente;
+
+
+-- 4. Teste da Função: ObterPrecoMedioCategoria
+-- Retorna o preço médio dos produtos na Categoria 1 (substitua por um ID real se necessário).
+SELECT ObterPrecoMedioCategoria(1) AS PrecoMedioCategoria1;
+-- Teste com uma categoria sem produtos ou inexistente
+SELECT ObterPrecoMedioCategoria(999) AS PrecoMedioCategoriaInexistente;
+
+
+-- 5. Teste da Função: ObterNomeFuncionarioPorId
+-- Retorna o nome de funcionários específicos.
+SELECT ObterNomeFuncionarioPorId(1) AS NomeFuncionario1RobertoCarlos;
+SELECT ObterNomeFuncionarioPorId(2) AS NomeFuncionario2FernandaLima;
+SELECT ObterNomeFuncionarioPorId(999) AS NomeFuncionarioInexistente;
+
+
+-- 6. Teste da Função: ContarItensVendidosPorProduto
+-- Conta o total de um produto específico vendido (use um ID de produto que você sabe que foi vendido).
+SELECT ContarItensVendidosPorProduto(1) AS TotalVendidoProduto1CamisetaBasica;
+SELECT ContarItensVendidosPorProduto(5) AS TotalVendidoProduto5ColarPedras;
+SELECT ContarItensVendidosPorProduto(999) AS TotalVendidoProdutoInexistente;
+
+-- Creat Triggers
+
+DELIMITER $$
+
+-- 1. Trigger: `trg_AtualizarEstoqueAposVenda`
+-- Garante que o estoque de um produto seja reduzido automaticamente após a inserção de um item de venda.
+-- Evento: AFTER INSERT na tabela Item_Venda
+CREATE TRIGGER trg_AtualizarEstoqueAposVenda
+AFTER INSERT ON Item_Venda
 FOR EACH ROW
 BEGIN
-    INSERT INTO Log_Vendas (idVenda, Data_Log)
-    VALUES (NEW.idVenda, NOW());
-END;//
+    UPDATE Estoque
+    SET Quantidade = Quantidade - NEW.Quantidade
+    WHERE idProduto = NEW.idProduto;
+END $$
 
-CREATE TRIGGER trg_before_update_estoque
+-- 2. Trigger: `trg_PrevenirEstoqueNegativo`
+-- Impede que a quantidade em estoque de um produto se torne negativa.
+-- Evento: BEFORE UPDATE na tabela Estoque (quando a quantidade é alterada)
+CREATE TRIGGER trg_PrevenirEstoqueNegativo
 BEFORE UPDATE ON Estoque
 FOR EACH ROW
 BEGIN
     IF NEW.Quantidade < 0 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Quantidade não pode ser negativa';
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Erro: A quantidade em estoque não pode ser negativa.';
     END IF;
-END;//
+END $$
 
-CREATE TRIGGER trg_after_delete_produto
-AFTER DELETE ON Produto
+-- 3. Trigger: `trg_RegistrarAlteracaoPrecoProduto`
+-- Registra um log quando o preço de um produto é alterado.
+-- Para esta trigger, assumimos uma tabela de log simples:
+-- CREATE TABLE Log_Preco_Produto (
+--     idLog INT AUTO_INCREMENT PRIMARY KEY,
+--     idProduto INT,
+--     Preco_Antigo DECIMAL(10,2),
+--     Preco_Novo DECIMAL(10,2),
+--     Data_Alteracao DATETIME DEFAULT NOW(),
+--     Usuario VARCHAR(100) DEFAULT USER()
+-- );
+-- Evento: AFTER UPDATE na tabela Produto (quando o preço muda)
+CREATE TRIGGER trg_RegistrarAlteracaoPrecoProduto
+AFTER UPDATE ON Produto
 FOR EACH ROW
 BEGIN
-    INSERT INTO Log_Produtos (Nome_Produto, Data_Remocao)
-    VALUES (OLD.Nome_Produto, NOW());
-END;//
-
-CREATE TRIGGER trg_before_insert_funcionario
-BEFORE INSERT ON Funcionario
-FOR EACH ROW
-BEGIN
-    IF NEW.CPF IS NULL THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CPF obrigatório';
+    IF OLD.Preco <> NEW.Preco THEN
+        INSERT INTO Log_Preco_Produto (idProduto, Preco_Antigo, Preco_Novo, Data_Alteracao, Usuario)
+        VALUES (NEW.idProduto, OLD.Preco, NEW.Preco, NOW(), USER());
     END IF;
-END;//
+END $$
 
-CREATE TRIGGER trg_after_update_promocao
-AFTER UPDATE ON Promocao
+-- 4. Trigger: `trg_AtualizarValorTotalVenda`
+-- Atualiza o Valor_Total na tabela Venda sempre que um item_venda é alterado (atualizado ou deletado).
+-- Esta é crucial para manter a integridade do Valor_Total da Venda.
+-- Evento: AFTER UPDATE e AFTER DELETE na tabela Item_Venda
+CREATE TRIGGER trg_AtualizarValorTotalVenda_AU
+AFTER UPDATE ON Item_Venda
 FOR EACH ROW
 BEGIN
-    INSERT INTO Log_Promocoes (idPromocao, Data_Atualizacao)
-    VALUES (NEW.idPromocao, NOW());
-END;//
+    -- Atualiza o valor total da venda para o ID da venda antiga e da nova, caso o idVenda tenha mudado (raro, mas possível)
+    UPDATE Venda
+    SET Valor_Total = (SELECT COALESCE(SUM(Quantidade * Preco_Unitario), 0) FROM Item_Venda WHERE idVenda = NEW.idVenda)
+    WHERE idVenda = NEW.idVenda;
+
+    IF OLD.idVenda <> NEW.idVenda THEN -- Se o item mudou de venda (caso improvável)
+        UPDATE Venda
+        SET Valor_Total = (SELECT COALESCE(SUM(Quantidade * Preco_Unitario), 0) FROM Item_Venda WHERE idVenda = OLD.idVenda)
+        WHERE idVenda = OLD.idVenda;
+    END IF;
+END $$
+
+CREATE TRIGGER trg_AtualizarValorTotalVenda_AD
+AFTER DELETE ON Item_Venda
+FOR EACH ROW
+BEGIN
+    -- Atualiza o valor total da venda para o ID da venda do item deletado
+    UPDATE Venda
+    SET Valor_Total = (SELECT COALESCE(SUM(Quantidade * Preco_Unitario), 0) FROM Item_Venda WHERE idVenda = OLD.idVenda)
+    WHERE idVenda = OLD.idVenda;
+END $$
+
+-- 5. Trigger: `trg_DefinirDataCadastroCliente`
+-- Define automaticamente a Data_Cadastro para a data atual no momento da inserção de um novo cliente, se não for fornecida.
+-- Evento: BEFORE INSERT na tabela Cliente
+CREATE TRIGGER trg_DefinirDataCadastroCliente
+BEFORE INSERT ON Cliente
+FOR EACH ROW
+BEGIN
+    IF NEW.Data_Cadastro IS NULL THEN
+        SET NEW.Data_Cadastro = CURDATE();
+    END IF;
+END $$
+
+-- 6. Trigger: `trg_ValidarDataPromocao`
+-- Impede que uma promoção seja criada ou atualizada com Data_Fim anterior à Data_Inicio.
+-- Evento: BEFORE INSERT e BEFORE UPDATE na tabela Promocao
+CREATE TRIGGER trg_ValidarDataPromocao_BI
+BEFORE INSERT ON Promocao
+FOR EACH ROW
+BEGIN
+    IF NEW.Data_Fim < NEW.Data_Inicio THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Erro: Data_Fim da promoção não pode ser anterior à Data_Inicio.';
+    END IF;
+END $$
+
+CREATE TRIGGER trg_ValidarDataPromocao_BU
+BEFORE UPDATE ON Promocao
+FOR EACH ROW
+BEGIN
+    IF NEW.Data_Fim < NEW.Data_Inicio THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Erro: Data_Fim da promoção não pode ser anterior à Data_Inicio.';
+    END IF;
+END $$
 
 DELIMITER ;
 
--- -----------------------------------------------------
--- Teste de triggers
--- -----------------------------------------------------
-INSERT INTO Cliente (Nome_Cliente, CPF, Email, Telefone, Endereco_Completo, Sexo, Data_Nascimento)
-VALUES ('Teste Trigger', '999.999.999-99', 'emailinvalido', '(00) 00000-0000', 'Rua Teste, 123', 'Feminino', '2000-01-01');
+-- teste triggers
+--tabela necessaria para salvar os registros da trigger
+CREATE TABLE Log_Preco_Produto (
+    idLog INT AUTO_INCREMENT PRIMARY KEY,
+    idProduto INT,
+    Preco_Antigo DECIMAL(10,2),
+    Preco_Novo DECIMAL(10,2),
+    Data_Alteracao DATETIME DEFAULT NOW(),
+    Usuario VARCHAR(100) DEFAULT USER()
+);
 
-INSERT INTO Venda (Data_Venda, Valor_Total, idCliente, idFuncionario)
-VALUES (NOW(), 200.00, 1, 2);
+USE mydb;
 
-UPDATE Estoque SET Quantidade = -10 WHERE idEstoque = 1;
+-- --- TESTES DOS TRIGGERS ---
 
-DELETE FROM Produto WHERE idProduto = 1;
+-- Preparação: Verifica estado inicial
+SELECT '--- Estado Inicial ---' AS 'Status';
+SELECT idProduto, Quantidade FROM Estoque WHERE idProduto = 1; -- Camiseta Básica
+SELECT idVenda, Valor_Total FROM Venda WHERE idVenda = 1; -- Venda existente (se tiver)
+SELECT idProduto, Preco FROM Produto WHERE idProduto = 1; -- Preço do produto
+SELECT COUNT(*) FROM Log_Preco_Produto;
+SELECT idCliente, Nome_Cliente, Data_Cadastro FROM Cliente ORDER BY idCliente DESC LIMIT 1;
+SELECT idPromocao, Nome_Promocao, Data_Inicio, Data_Fim FROM Promocao WHERE idPromocao = 6; -- Use um ID de promoção que possa ser modificado/inserido para teste
 
-INSERT INTO Funcionario (Nome_Funcionario, CPF, Email)
-VALUES ('Novo Funcionario', NULL, 'email@teste.com');
 
-UPDATE Promocao SET Desconto = 0.30 WHERE idPromocao = 1;
+-- 1. Teste do Trigger: `trg_AtualizarEstoqueAposVenda`
+-- Este trigger é ativado ao inserir um Item_Venda.
+SELECT '--- Teste: trg_AtualizarEstoqueAposVenda ---' AS 'Status';
+-- Adiciona um novo item à Venda 1 (se a Venda 1 existir, se não, use um idVenda válido ou crie uma venda antes)
+-- Assume que Venda 1 e Produto 1 existem.
+-- Estoque do produto 1 deve diminuir.
+INSERT INTO Item_Venda (Quantidade, Preco_Unitario, idProduto, idVenda)
+VALUES (3, 35.00, 1, 1); -- Adicionando 3 Camisetas Básicas à Venda 1
+
+SELECT idProduto, Quantidade FROM Estoque WHERE idProduto = 1; -- Verifica o estoque
+
+
+-- 2. Teste do Trigger: `trg_PrevenirEstoqueNegativo`
+-- Este trigger impede que o estoque se torne negativo.
+SELECT '--- Teste: trg_PrevenirEstoqueNegativo ---' AS 'Status';
+-- Tentativa de atualizar o estoque do Produto 1 para um valor negativo.
+-- Isso deve gerar um erro.
+-- USE APENAS PARA TESTE, POIS IRÁ CAUSAR UM ERRO E PARAR A EXECUÇÃO SE O CLIENTE SQL FOR CONFIGURADO PARA ISSO.
+-- Para ver o erro, execute esta linha separadamente.
+-- UPDATE Estoque SET Quantidade = -5 WHERE idProduto = 1;
+
+-- Atualização válida (não negativa)
+UPDATE Estoque SET Quantidade = 50 WHERE idProduto = 1;
+SELECT idProduto, Quantidade FROM Estoque WHERE idProduto = 1;
+
+
+-- 3. Teste do Trigger: `trg_RegistrarAlteracaoPrecoProduto`
+-- Este trigger registra alterações de preço de produto em Log_Preco_Produto.
+SELECT '--- Teste: trg_RegistrarAlteracaoPrecoProduto ---' AS 'Status';
+-- Altera o preço do Produto 1.
+UPDATE Produto SET Preco = 36.50 WHERE idProduto = 1;
+SELECT idProduto, Preco FROM Produto WHERE idProduto = 1;
+SELECT * FROM Log_Preco_Produto ORDER BY Data_Alteracao DESC LIMIT 1; -- Verifica o log
+
+
+-- 4. Teste dos Triggers: `trg_AtualizarValorTotalVenda_AU` e `trg_AtualizarValorTotalVenda_AD`
+-- Estes triggers atualizam o Valor_Total da Venda.
+SELECT '--- Teste: trg_AtualizarValorTotalVenda ---' AS 'Status';
+SELECT idVenda, Valor_Total FROM Venda WHERE idVenda = 1; -- Valor antes
+
+-- 4.1 Teste AU (Atualização de Item_Venda):
+-- Altera a quantidade de um item na Venda 1 (o item que acabamos de inserir, ou um existente).
+-- O Valor_Total da Venda 1 deve ser atualizado automaticamente.
+UPDATE Item_Venda
+SET Quantidade = 5, Preco_Unitario = 30.00 -- Altera a quantidade e o preço unitário do último item inserido na venda 1
+WHERE idVenda = 1 AND idProduto = 1 ORDER BY idItem_Venda DESC LIMIT 1;
+
+SELECT idVenda, Valor_Total FROM Venda WHERE idVenda = 1; -- Valor após atualização
+
+-- 4.2 Teste AD (Deleção de Item_Venda):
+-- Deleta um item da Venda 1.
+-- O Valor_Total da Venda 1 deve ser atualizado automaticamente.
+DELETE FROM Item_Venda WHERE idVenda = 1 AND idProduto = 1 AND Quantidade = 5; -- Deleta o item que acabamos de alterar
+
+SELECT idVenda, Valor_Total FROM Venda WHERE idVenda = 1; -- Valor após deleção
+
+
+-- 5. Teste do Trigger: `trg_DefinirDataCadastroCliente`
+-- Este trigger define a Data_Cadastro para novos clientes.
+SELECT '--- Teste: trg_DefinirDataCadastroCliente ---' AS 'Status';
+-- Insere um novo cliente sem especificar Data_Cadastro.
+INSERT INTO Cliente (Nome_Cliente, CPF, Email, Telefone, Endereco_Completo)
+VALUES ('Novo Cliente Teste Trigger', '111.111.111-13', 'trigger@cliente.com', '(11) 99999-0000', 'Rua da Trigger, 10');
+
+SELECT idCliente, Nome_Cliente, Data_Cadastro FROM Cliente ORDER BY idCliente DESC LIMIT 1; -- Verifica a data de cadastro
+
+
+-- 6. Teste dos Triggers: `trg_ValidarDataPromocao_BI` e `trg_ValidarDataPromocao_BU`
+-- Estes triggers validam as datas de início e fim da promoção.
+SELECT '--- Teste: trg_ValidarDataPromocao ---' AS 'Status';
+
+-- 6.1 Teste BI (INSERT inválido):
+-- Tentativa de inserir uma promoção com Data_Fim antes de Data_Inicio.
+-- Isso deve gerar um erro.
+-- USE APENAS PARA TESTE, POIS IRÁ CAUSAR UM ERRO.
+-- INSERT INTO Promocao (Nome_Promocao, Data_Inicio, Data_Fim, Desconto, Ativo)
+-- VALUES ('Promo Invalida', '2025-07-01', '2025-06-01', 0.10, TRUE);
+
+-- Inserção válida:
+INSERT INTO Promocao (Nome_Promocao, Data_Inicio, Data_Fim, Desconto, Ativo)
+VALUES ('Promo Valida Teste', '2025-07-01', '2025-07-31', 0.05, TRUE);
+SELECT idPromocao, Nome_Promocao, Data_Inicio, Data_Fim FROM Promocao ORDER BY idPromocao DESC LIMIT 1;
+
+-- 6.2 Teste BU (UPDATE inválido):
+-- Tenta atualizar uma promoção existente para ter Data_Fim antes de Data_Inicio.
+-- Isso deve gerar um erro.
+-- USE APENAS PARA TESTE, POIS IRÁ CAUSAR UM ERRO.
+-- UPDATE Promocao SET Data_Fim = '2025-01-01' WHERE idPromocao = (SELECT idPromocao FROM Promocao ORDER BY idPromocao DESC LIMIT 1);
+
+-- Atualização válida:
+UPDATE Promocao SET Desconto = 0.07 WHERE idPromocao = (SELECT idPromocao FROM Promocao ORDER BY idPromocao DESC LIMIT 1);
+SELECT idPromocao, Nome_Promocao, Desconto FROM Promocao ORDER BY idPromocao DESC LIMIT 1;
